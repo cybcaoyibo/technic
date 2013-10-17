@@ -15,6 +15,9 @@ dofile(modpath.."/config.lua")
 -- Helper functions
 dofile(modpath.."/helpers.lua")
 
+-- IC2 Style energy network manager
+dofile(modpath.."/energy.lua")
+
 -- Items 
 dofile(modpath.."/items.lua")
 
