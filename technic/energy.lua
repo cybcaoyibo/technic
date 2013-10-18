@@ -1,9 +1,10 @@
 -- IC2 Style Energy network manager
 -- cybcaoyibo@126.com
 
---TODO: octant tree for bounding box
---TODO: linked list replacement for nodes
---TODO: linked list replacement for circuits
+--OPTIONAL:
+--octant tree for bounding box
+--linked list replacement for nodes
+--linked list replacement for circuits
 
 --[==[
 
@@ -19,8 +20,9 @@ node
 {
 	int id
 	vector3 pos
+	//adjacent node id (only that can connect to) (0 = null)
 	int XN, XP, YN, YP, ZN, ZP
-	int type //0: producer, 1: receiver, 2: battery, 3: cable
+	int type //0: producer, 1: receiver, 2: battery, 3: cable //battery = producer + receiver
 	conn_attrib conn_attrib
 	float loss //only for cables
 	int max_packet //only for cables
@@ -45,7 +47,7 @@ circuit
 	vector3 bbmin
 	vector3 bbmax
 	vector<node> nodes
-	map<int, subnet> subnets
+	map<int, subnet> subnets //key = producer_id
 }
 
 world
@@ -60,6 +62,11 @@ local json = (loadfile (technic.modpath.."/dkjson.lua"))();
 
 technic.energy = {};
 technic.energy.world = {circuits = {}, version = 1};
+
+--debug print
+local function dprint(...)
+	print(unpack(args));
+end
 
 function technic.energy.get_save_file_name()
 	return minetest.get_worldpath() .. "/technic_energy.txt";
@@ -114,6 +121,7 @@ local function find_node_broad_test(circuit, x, y, z)
 end
 
 local function add_node_narrow_test(circuit, x, y, z, conn_attrib)
+	--TODO: return a list that contains all possible adjacent node
 	for k, v in ipairs(circuit.nodes) do
 		if(v.conn_attrib.XNc and conn_attrib.XPc and x == v.pos.x - 1 and y == v.pos.y and z == v.pos.z) then return true end;
 		if(v.conn_attrib.XPc and conn_attrib.XNc and x == v.pos.x + 1 and y == v.pos.y and z == v.pos.z) then return true end;
@@ -145,6 +153,25 @@ local function new_circuit()
 end
 
 local function rebuild_circuit(id)
+	local circuit = technic.energy.world.circuits[id];
+	assert(table.getn(circuit.nodes) > 0);
+	
+	--bounding box
+	circuit.bbmin = circuit.nodes[1].pos;
+	circuit.bbmax = circuit.nodes[1].pos;
+	if(table.getn(circuit.nodes) > 1) then
+		for i = 2, table.getn(circuit.nodes) do
+			local node = circuit.nodes[i];
+			if(node.pos.x < circuit.bbmin.x) then circuit.bbmin.x = node.pos.x end;
+			if(node.pos.y < circuit.bbmin.y) then circuit.bbmin.y = node.pos.y end;
+			if(node.pos.z < circuit.bbmin.z) then circuit.bbmin.z = node.pos.z end;
+			if(node.pos.x > circuit.bbmax.x) then circuit.bbmax.x = node.pos.x end;
+			if(node.pos.y > circuit.bbmax.y) then circuit.bbmax.y = node.pos.y end;
+			if(node.pos.z > circuit.bbmax.z) then circuit.bbmax.z = node.pos.z end;
+		end
+	end
+	
+	
 	--TODO
 end
 
@@ -166,19 +193,43 @@ function technic.energy.remove_node(x, y, z)
 		print("energy.lua: attempt to remove a node which is unadded (2) (" .. x .. ", ".. y .. ", " .. z .. ")");
 		return;
 	end
-	local other_nodes = {};
-	local i = 1;
-	for k, v in ipairs(technic.energy.world.circuits[possible_narrow[1]].nodes) do
-		if(v.id ~= node_id) then
-			table.insert(other_nodes, v);
-		else
-			v.id = i;
-			i = i + 1;
+	if(table.getn(technic.energy.world.circuits[possible_narrow[1]].nodes) > 0) then
+		--break adjacency
+		do
+			local node = technic.energy.world.circuits[possible_narrow[1]].nodes[node_id];
+			if(node.XN ~= 0) then technic.energy.world.circuits[possible_narrow[1]].nodes[node.XN].XP = 0 end;
+			if(node.XP ~= 0) then technic.energy.world.circuits[possible_narrow[1]].nodes[node.XP].XN = 0 end;
+			if(node.YN ~= 0) then technic.energy.world.circuits[possible_narrow[1]].nodes[node.YN].YP = 0 end;
+			if(node.YP ~= 0) then technic.energy.world.circuits[possible_narrow[1]].nodes[node.YP].YN = 0 end;
+			if(node.ZN ~= 0) then technic.energy.world.circuits[possible_narrow[1]].nodes[node.ZN].ZP = 0 end;
+			if(node.ZP ~= 0) then technic.energy.world.circuits[possible_narrow[1]].nodes[node.ZP].ZN = 0 end;
 		end
+		--remove node from table
+		local other_nodes = {};
+		local i = 1;
+		for k, v in ipairs(technic.energy.world.circuits[possible_narrow[1]].nodes) do
+			if(v.id ~= node_id) then
+				v.id = i;
+				i = i + 1;
+				table.insert(other_nodes, v);
+			end
+		end
+		assert(table.getn(other_nodes) == table.getn(technic.energy.world.circuits[possible_narrow[1]].nodes) - 1);
+		technic.energy.world.circuits[possible_narrow[1]].nodes = other_nodes;
+		rebuild_circuit(possible_narrow[1]);
+	else
+		local other_circuits = {};
+		local i = 1;
+		for k, v in ipairs(technic.energy.world.circuits) do
+			if(v.id ~= possible_narrow[1]) then
+				v.id = i;
+				i = i + 1;
+				table.insert(other_circuits, v);
+			end
+		end
+		assert(table.getn(other_circuits) == table.getn(technic.energy.world.circuits));
+		technic.energy.world.circuits = other_circuits;
 	end
-	assert(table.getn(other_nodes) == table.getn(technic.energy.world.circuits[possible_narrow[1]].nodes) - 1);
-	technic.energy.world.circuits[possible_narrow[1]].nodes = other_nodes;
-	rebuild_circuit(possible_narrow[1]);
 end
 
 function technic.energy.add_node(x, y, z)
@@ -209,6 +260,7 @@ function technic.energy.add_node(x, y, z)
 	elseif(table.getn(possible_narrow) == 1) then
 		node.id = table.getn(technic.energy.world.circuits[possible_narrow[1]].nodes) + 1;
 		table.insert(technic.energy.world.circuits[possible_narrow[1]].nodes, node);
+		--TODO: add adjacency
 		rebuild_circuit(possible_narrow[1]);
 	else
 		--reindex other circuits
@@ -243,11 +295,12 @@ function technic.energy.add_node(x, y, z)
 				end
 			end
 		end
+		--TODO: add adjacency
 		--reindex nodes
 		for k, v in ipairs(new_circuit.nodes) do
 			v.id = k;
 		end
-		--add and rebuild
+		--add to table and rebuild
 		new_circuit.id = table.getn(technic.energy.world.circuits + 1);
 		table.insert(technic.energy.world.circuits, new_circuit);
 		rebuild_circuit(new_circuit.id);
