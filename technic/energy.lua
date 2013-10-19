@@ -65,6 +65,7 @@ technic.energy.world = {circuits = {}, version = 1};
 
 --debug print
 local function dprint(...)
+	local args = {...};
 	print(unpack(args));
 end
 
@@ -121,16 +122,18 @@ local function find_node_broad_test(circuit, x, y, z)
 end
 
 local function add_node_narrow_test(circuit, x, y, z, conn_attrib)
-	--TODO: return a list that contains all possible adjacent node
+	--adjs = {{node, which_face}, ...}
+	--which_face: orient from the node to be added
+	local adjs = {};
 	for k, v in ipairs(circuit.nodes) do
-		if(v.conn_attrib.XNc and conn_attrib.XPc and x == v.pos.x - 1 and y == v.pos.y and z == v.pos.z) then return true end;
-		if(v.conn_attrib.XPc and conn_attrib.XNc and x == v.pos.x + 1 and y == v.pos.y and z == v.pos.z) then return true end;
-		if(v.conn_attrib.YNc and conn_attrib.YPc and x == v.pos.x and y == v.pos.y - 1 and z == v.pos.z) then return true end;
-		if(v.conn_attrib.YPc and conn_attrib.YNc and x == v.pos.x and y == v.pos.y + 1 and z == v.pos.z) then return true end;
-		if(v.conn_attrib.ZNc and conn_attrib.ZPc and x == v.pos.x and y == v.pos.y and z == v.pos.z - 1) then return true end;
-		if(v.conn_attrib.ZPc and conn_attrib.ZNc and x == v.pos.x and y == v.pos.y and z == v.pos.z + 1) then return true end;
+		if    (v.conn_attrib.XNc and conn_attrib.XPc and x == v.pos.x - 1 and y == v.pos.y and z == v.pos.z) then table.insert(adjs, {v, 1});
+		elseif(v.conn_attrib.XPc and conn_attrib.XNc and x == v.pos.x + 1 and y == v.pos.y and z == v.pos.z) then table.insert(adjs, {v, 2});
+		elseif(v.conn_attrib.YNc and conn_attrib.YPc and x == v.pos.x and y == v.pos.y - 1 and z == v.pos.z) then table.insert(adjs, {v, 3});
+		elseif(v.conn_attrib.YPc and conn_attrib.YNc and x == v.pos.x and y == v.pos.y + 1 and z == v.pos.z) then table.insert(adjs, {v, 4});
+		elseif(v.conn_attrib.ZNc and conn_attrib.ZPc and x == v.pos.x and y == v.pos.y and z == v.pos.z - 1) then table.insert(adjs, {v, 5});
+		elseif(v.conn_attrib.ZPc and conn_attrib.ZNc and x == v.pos.x and y == v.pos.y and z == v.pos.z + 1) then table.insert(adjs, {v, 6}); end;
 	end
-	return false;
+	return adjs;
 end
 
 local function find_node_narrow_test(circuit, x, y, z)
@@ -170,7 +173,6 @@ local function rebuild_circuit(id)
 			if(node.pos.z > circuit.bbmax.z) then circuit.bbmax.z = node.pos.z end;
 		end
 	end
-	
 	
 	--TODO
 end
@@ -246,11 +248,14 @@ function technic.energy.add_node(x, y, z)
 		end
 	end
 	for k, v in ipairs(possible_broad) do
-		if(add_node_narrow_test(technic.energy.world.circuits[v], x, y, z, node.conn_attrib)) then
-			table.insert(possible_narrow, v);
+		local rst = add_node_narrow_test(technic.energy.world.circuits[v], x, y, z, node.conn_attrib);
+		if(table.getn(rst) > 0) then
+			table.insert(possible_narrow, {cid = v, adjs = rst});
 		end
 	end
 	if(table.getn(possible_narrow) == 0) then
+		--(need to create a new circuit)
+		
 		local circuit = new_circuit();
 		circuit.id = table.getn(technic.energy.world.circuits) + 1;
 		technic.energy.world.circuits[circuit.id] = circuit;
@@ -258,11 +263,25 @@ function technic.energy.add_node(x, y, z)
 		technic.energy.world.circuits[circuit.id].nodes[1] = node;
 		rebuild_circuit(circuit.id);
 	elseif(table.getn(possible_narrow) == 1) then
-		node.id = table.getn(technic.energy.world.circuits[possible_narrow[1]].nodes) + 1;
-		table.insert(technic.energy.world.circuits[possible_narrow[1]].nodes, node);
-		--TODO: add adjacency
-		rebuild_circuit(possible_narrow[1]);
+		--(need to add to a existed circuit)
+		
+		node.id = table.getn(technic.energy.world.circuits[possible_narrow[1].cid].nodes) + 1;
+		--add adjacency
+		for k, v in ipairs(possible_narrow[1].adjs) do
+			    if(v[2] == 0) then v[1].XP = node.id; node.XN = v[1].id;
+			elseif(v[2] == 1) then v[1].XN = node.id; node.XP = v[1].id;
+			elseif(v[2] == 2) then v[1].YP = node.id; node.YN = v[1].id;
+			elseif(v[2] == 3) then v[1].YN = node.id; node.YP = v[1].id;
+			elseif(v[2] == 4) then v[1].ZP = node.id; node.ZN = v[1].id;
+			elseif(v[2] == 5) then v[1].ZN = node.id; node.ZP = v[1].id;
+			else assert(false); end;
+		end
+		--add node to table
+		table.insert(technic.energy.world.circuits[possible_narrow[1].cid].nodes, node);
+		rebuild_circuit(possible_narrow[1].cid);
 	else
+		--(need to combine multiple circuits)
+		
 		--reindex other circuits
 		local chosen_circuits = {};
 		local other_circuits = {};
@@ -295,15 +314,30 @@ function technic.energy.add_node(x, y, z)
 				end
 			end
 		end
-		--TODO: add adjacency
 		--reindex nodes
 		for k, v in ipairs(new_circuit.nodes) do
 			v.id = k;
 		end
-		--add to table and rebuild
+		--new node id
+		node.id = table.getn(new_circuit.nodes) + 1;
+		--add adjacency
+		for k, v in ipairs(possible_narrow) do
+			for k1, v1 in ipairs(v.adjs) do
+					if(v1[2] == 0) then v1[1].XP = node.id; node.XN = v1[1].id;
+				elseif(v1[2] == 1) then v1[1].XN = node.id; node.XP = v1[1].id;
+				elseif(v1[2] == 2) then v1[1].YP = node.id; node.YN = v1[1].id;
+				elseif(v1[2] == 3) then v1[1].YN = node.id; node.YP = v1[1].id;
+				elseif(v1[2] == 4) then v1[1].ZP = node.id; node.ZN = v1[1].id;
+				elseif(v1[2] == 5) then v1[1].ZN = node.id; node.ZP = v1[1].id;
+				else assert(false); end;
+			end
+		end
+		--add node to table
+		new_circuit.nodes[node.id] = node;
+		--add to table, add adjacency and rebuild
 		new_circuit.id = table.getn(technic.energy.world.circuits + 1);
 		table.insert(technic.energy.world.circuits, new_circuit);
-		rebuild_circuit(new_circuit.id);
+		rebuild_circuit(new_circuit.id, true);
 	end
 end
 
