@@ -22,7 +22,7 @@ node
 	vector3 pos
 	//adjacent node id (only that can connect to) (0 = null)
 	int XN, XP, YN, YP, ZN, ZP
-	int type //0: producer, 1: receiver, 2: battery, 3: cable //battery = producer + receiver
+	int type //0: producer, 1: receiver, 2: both, 3: cable
 	conn_attrib conn_attrib
 	float loss //only for cables
 	int max_packet //only for cables
@@ -32,13 +32,13 @@ path
 {
 	int receiver_id
 	int total_loss
-	vector<vector3> cables
+	vector<int> cables //value = node_id, (from receiver to producer)
 }
 
 subnet
 {
 	int producer_id
-	vector<path> paths
+	map<int, path> paths //key = receiver_id
 }
 
 circuit
@@ -48,6 +48,7 @@ circuit
 	vector3 bbmax
 	vector<node> nodes
 	map<int, subnet> subnets //key = producer_id
+	vector<int> receivers //all receivers in the circuit
 }
 
 world
@@ -151,8 +152,101 @@ local function new_circuit()
 	return {id = 0,
 			bbmin = {x = 0, y = 0, z = 0},
 			bbmax = {x = 0, y = 0, z = 0},
-			nodes = {},
+			nodes = {}, receivers = {},
 			subnets = {}}
+end
+
+local function build_subnet(circuit, nid)
+	
+	local paths = {};
+	
+	--Dijkstra's algorithm
+	
+	--A: distance list
+	--B: unprocessed list
+	--C: previous list
+	--D: out list
+	local A, B, C, D = {}, {}, {}, {};
+	A[nid] = 0;
+	B[1] = nid;
+	
+	while true do
+		if(table.getn(B) == 0) then break end
+		--get the smallest one in B
+		local selected_B = 1;
+		for k, v in ipairs(B) do
+			if(A[v] < A[B[selected_B]]) then
+				selected_B = k;
+			end
+		end
+		--mark it out and remove it from B
+		local now = B[selected_B];
+		D[now] = true;
+		table.remove(B, selected_B);
+		--list all connected nodes
+		local neighbors = {};
+		if(circuit.nodes[now].XN ~= 0) then table.insert(neighbors, circuit.nodes[now].XN) end
+		if(circuit.nodes[now].XP ~= 0) then table.insert(neighbors, circuit.nodes[now].XP) end
+		if(circuit.nodes[now].YN ~= 0) then table.insert(neighbors, circuit.nodes[now].YN) end
+		if(circuit.nodes[now].YP ~= 0) then table.insert(neighbors, circuit.nodes[now].YP) end
+		if(circuit.nodes[now].ZN ~= 0) then table.insert(neighbors, circuit.nodes[now].ZN) end
+		if(circuit.nodes[now].ZP ~= 0) then table.insert(neighbors, circuit.nodes[now].ZP) end
+		--process all connected nodes
+		for k, v in ipairs(neighbors) do
+			if(D[v] ~= true) then
+				if(circuit.nodes[v].type == 3) then
+					--(cable)
+					local new_distance = A[now] + circuit.nodes[v].loss;
+					if(A[v] == nil) then
+						A[v] = new_distance;
+						C[v] = now;
+						table.insert(B, v);
+					else
+						if(A[v] > new_distance) then
+							A[v] = new_distance;
+							C[v] = now;
+						end
+					end
+				elseif(circuit.nodes[v].type == 1 or circuit.nodes[v].type == 2) then
+					--(receiver)
+					if(A[v] == nil) then
+						A[v] = A[now];
+						C[v] = now;
+						--receiver is the terminal of the graph, so don't add it to B
+					else
+						if(A[v] > A[now]) then
+							A[v] = A[now];
+							C[v] = now;
+						end
+					end
+				end
+			end
+		end
+	end
+	
+	for i, j in pairs(circuit.receivers) do
+		--j can be nid if nid is both a producer and a receiver
+		if(j ~= nid) then
+			assert(A[j] ~= nil);
+			local now_path = {};
+			now_path.receiver_id = j;
+			now_path.total_loss = A[j];
+			now_path.cables = {};
+			
+			--reverse iteration of cables
+			local now_cable = j;
+			while true do
+				assert(C[now_cable] ~= nil);
+				now_cable = C[now_cable];
+				if(now_cable == nid) then break end;
+				table.insert(now_path.cables, now_cable);
+			end
+			
+			paths[j] = now_path;
+		end
+	end
+	
+	return paths;
 end
 
 local function rebuild_circuit(id)
@@ -174,7 +268,15 @@ local function rebuild_circuit(id)
 		end
 	end
 	
-	--TODO
+	--subnets
+	circuit.subnets = {};
+	for k, v in ipairs(circuit.nodes) do
+		if(v.type == 0 or v.type == 2) then table.insert(circuit.subnets, {producer_id = v.id}) end
+		if(v.type == 1 or v.type == 2) then table.insert(circuit.receivers, v.id) end
+	end
+	for k, v in ipairs(circuit.subnets) do
+		v.paths = build_subnet(circuit, v.producer_id);
+	end
 end
 
 function technic.energy.remove_node(x, y, z)
@@ -218,7 +320,7 @@ function technic.energy.remove_node(x, y, z)
 		end
 		assert(table.getn(other_nodes) == table.getn(technic.energy.world.circuits[possible_narrow[1]].nodes) - 1);
 		technic.energy.world.circuits[possible_narrow[1]].nodes = other_nodes;
-		rebuild_circuit(possible_narrow[1]);
+		rebuild_circuit(possible_narrow[1].cid);
 	else
 		local other_circuits = {};
 		local i = 1;
@@ -337,7 +439,7 @@ function technic.energy.add_node(x, y, z)
 		--add to table, add adjacency and rebuild
 		new_circuit.id = table.getn(technic.energy.world.circuits + 1);
 		table.insert(technic.energy.world.circuits, new_circuit);
-		rebuild_circuit(new_circuit.id, true);
+		rebuild_circuit(new_circuit.id);
 	end
 end
 
