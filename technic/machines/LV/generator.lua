@@ -42,7 +42,11 @@ minetest.register_node("technic:generator", {
 		meta:set_string("formspec", generator_formspec)
 		local inv = meta:get_inventory()
 		inv:set_size("src", 1)
+		technic.energy.add_node(pos.x, pos.y, pos.z)
 	end,	
+	on_destruct = function(pos)
+		technic.energy.remove_node(pos.x, pos.y, pos.z)
+	end,
 	can_dig = function(pos,player)
 		local meta = minetest.get_meta(pos);
 		local inv = meta:get_inventory()
